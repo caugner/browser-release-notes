@@ -5,9 +5,9 @@ This repository keeps a searchable archive of release notes for browser and Java
 ## Branches
 
 - `main` contains this README and the scripts that fetch and publish the notes.
-- `releases` is an orphan history with one commit per release, oldest first, dated at the release date. Each commit adds `<browser>/<version>.md` and has an annotated `<browser>-v<version>` tag. It does not contain this README or the scripts.
+- `release-notes` is an orphan history with one commit per release, oldest first, dated at the release date. Each commit adds `<browser>/<version>.md` and has an annotated `<browser>-v<version>` tag. It does not contain this README or the scripts.
 
-Use `git switch releases` before running `grep`, `git log -S`, or `git blame` against the notes.
+Use `git switch release-notes` before running `grep`, `git log -S`, or `git blame` against the notes.
 
 ## Sources
 
@@ -33,8 +33,8 @@ Special cases: GitHub release tags are read through the API, and Node.js changel
 ```sh
 npm install
 node scripts/fetch.js --bcd ../browser-compat-data --out data firefox nodejs deno bun
-git worktree add --orphan -b releases ../browser-release-notes-releases
-node scripts/publish.js --bcd ../browser-compat-data --data data --worktree ../browser-release-notes-releases firefox nodejs deno bun
+git worktree add --orphan -b release-notes ../browser-release-notes-data
+node scripts/publish.js --bcd ../browser-compat-data --data data --worktree ../browser-release-notes-data firefox nodejs deno bun
 ```
 
 `fetch.js` skips files that already exist; pass `--force` to refetch. Set `GITHUB_TOKEN` to avoid the unauthenticated GitHub API rate limit. The fetch report lists releases that have no URL or that failed both live and from the Wayback Machine.

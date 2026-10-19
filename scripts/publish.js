@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Usage: node scripts/publish.js --bcd <BCD checkout> --data <fetched dir> --worktree <path> <browser>...
-// Adds one commit per release (oldest first) to the orphan `releases` branch, dated at the release date.
+// Adds one commit per release (oldest first) to the orphan `release-notes` branch, dated at the release date.
 import { execFileSync } from "node:child_process";
 import { copyFile, mkdir, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
