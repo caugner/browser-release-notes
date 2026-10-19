@@ -1,0 +1,13 @@
+{
+  "name": "browser-release-notes",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "fetch": "node scripts/fetch.js"
+  },
+  "dependencies": {
+    "linkedom": "^0.18.0",
+    "turndown": "^7.2.0"
+  }
+}
