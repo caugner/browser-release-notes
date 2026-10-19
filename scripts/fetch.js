@@ -27,9 +27,19 @@ const pageCache = new Map();
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function get(url, { retries = 3 } = {}) {
+// archive.org rate-limits aggressively: serialize its requests with a gap between them.
+let archiveQueue = Promise.resolve();
+function throttleArchive() {
+  const turn = archiveQueue.then(() => sleep(1500));
+  archiveQueue = turn;
+  return turn;
+}
+
+async function get(url, { retries = 5 } = {}) {
+  const isArchive = new URL(url).hostname.endsWith("archive.org");
   for (let attempt = 0; ; attempt++) {
     try {
+      if (isArchive) await throttleArchive();
       const headers = { "user-agent": UA };
       if (process.env.GITHUB_TOKEN && new URL(url).hostname === "api.github.com") {
         headers.authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
@@ -39,7 +49,7 @@ async function get(url, { retries = 3 } = {}) {
       return res;
     } catch (e) {
       if (attempt >= retries) throw e;
-      await sleep(2000 * 2 ** attempt);
+      await sleep(isArchive ? 10000 * (attempt + 1) : 2000 * 2 ** attempt);
     }
   }
 }
@@ -65,7 +75,9 @@ function fetchPage(url, releaseDate) {
       (async () => {
         try {
           const res = await get(url);
-          if (res.ok) return { body: await res.text(), archivedFrom: null };
+          const norm = (u) => new URL(u).pathname.replace(/\/$/, "").toLowerCase();
+          // A redirect to a different path usually means the page is gone (e.g. a news front page).
+          if (res.ok && norm(res.url) === norm(url)) return { body: await res.text(), archivedFrom: null };
         } catch (e) {
           console.error(`fetch ${url}: ${e.message}`);
         }
@@ -79,8 +91,19 @@ function fetchPage(url, releaseDate) {
 function htmlToMarkdown(html, fragment) {
   const { document } = parseHTML(html);
   for (const el of document.querySelectorAll("script, style, nav, footer, header, noscript")) el.remove();
-  let root = fragment ? document.getElementById(fragment) : null;
-  root ??= document.querySelector("main, article, #content, .content") ?? document.body;
+  const target = fragment ? document.getElementById(fragment) : null;
+  if (target && /^H[1-6]$/.test(target.tagName)) {
+    // A heading anchor in a multi-release page: take everything up to the next heading of the same or higher level.
+    const level = Number(target.tagName[1]);
+    const parts = [target.outerHTML];
+    for (let el = target.nextElementSibling; el; el = el.nextElementSibling) {
+      const m = /^H([1-6])$/.exec(el.tagName);
+      if (m && Number(m[1]) <= level) break;
+      parts.push(el.outerHTML);
+    }
+    return turndown.turndown(parts.join("\n")).trim();
+  }
+  const root = target ?? document.querySelector("main, article, #content, .content") ?? document.body;
   return turndown.turndown(root?.innerHTML ?? "").trim();
 }
 
@@ -93,6 +116,59 @@ function nodeSection(md, version) {
   let end = lines.findIndex((l, i) => i > start && /^##\s+/.test(l));
   if (end === -1) end = lines.length;
   return lines.slice(start, end).join("\n").trim();
+}
+
+/** Converts Apple DocC JSON (developer.apple.com/documentation) to Markdown. */
+function doccToMarkdown(doc) {
+  const inline = (nodes = []) =>
+    nodes
+      .map((n) => {
+        switch (n.type) {
+          case "codeVoice":
+            return `\`${n.code}\``;
+          case "emphasis":
+            return `*${inline(n.inlineContent)}*`;
+          case "strong":
+            return `**${inline(n.inlineContent)}**`;
+          case "reference":
+            return doc.references?.[n.identifier]?.title ?? n.identifier;
+          case "link":
+            return `[${n.title ?? n.destination}](${n.destination})`;
+          default:
+            return n.text ?? inline(n.inlineContent);
+        }
+      })
+      .join("");
+  const block = (b, indent = "") => {
+    switch (b.type) {
+      case "heading":
+        return `${"#".repeat(b.level)} ${b.text}`;
+      case "paragraph":
+        return indent + inline(b.inlineContent);
+      case "unorderedList":
+      case "orderedList":
+        return b.items
+          .map((item, i) => {
+            const marker = b.type === "orderedList" ? `${i + 1}.` : "-";
+            const [first, ...rest] = item.content.map((c) => block(c, indent + "  ").trimStart());
+            return [`${indent}${marker} ${first}`, ...rest].join("\n");
+          })
+          .join("\n");
+      case "codeListing":
+        return `\`\`\`${b.syntax ?? ""}\n${b.code.join("\n")}\n\`\`\``;
+      case "aside":
+        return b.content.map((c) => `> ${block(c)}`).join("\n");
+      default:
+        return "";
+    }
+  };
+  const title = doc.metadata?.title ? `# ${doc.metadata.title}\n\n${inline(doc.abstract)}\n\n` : "";
+  const body = (doc.primaryContentSections ?? [])
+    .flatMap((sec) => sec.content ?? [])
+    .map((b) => block(b))
+    .filter(Boolean)
+    .join("\n\n");
+  return `${title}${body}`.trim();
 }
 
 async function convert(browser, version, release) {
@@ -119,6 +195,12 @@ async function convert(browser, version, release) {
       const section = nodeSection(await res.text(), version);
       if (section) return { markdown: section, archivedFrom: null };
     }
+  }
+
+  // Apple documentation pages are JS-rendered; use the DocC JSON behind them.
+  if (full.hostname === "developer.apple.com" && full.pathname.startsWith("/documentation/")) {
+    const res = await get(`https://developer.apple.com/tutorials/data${full.pathname}.json`);
+    if (res.ok) return { markdown: doccToMarkdown(await res.json()), archivedFrom: null };
   }
 
   const page = await fetchPage(url, release.release_date);
